@@ -76,7 +76,7 @@ jobs:
           chmod +x build_scene_ebpf.sh build_kernel.sh
           LOG_FILE="$GITHUB_WORKSPACE/scene-ebpf-build.log"
           echo "===== Scene eBPF raw build log =====" | tee "$LOG_FILE"
-          echo "run_id=${GITHUB_RUN_ID} sha=${GITHUB_SHA} device=${DEVICE} target_os=${TARGET_OS}" \vert{} tee -a "$LOG_FILE"
+          echo "run_id=${GITHUB_RUN_ID} sha=${GITHUB_SHA} device=${DEVICE} target_os=${TARGET_OS}" | tee -a "$LOG_FILE"
 
           if [ -f "scripts/pahole-flags.sh" ]; then
             echo "[*] Patching scripts/pahole-flags.sh for new pahole..." | tee -a "$LOG_FILE"
