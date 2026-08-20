@@ -76,24 +76,27 @@ jobs:
           chmod +x build_scene_ebpf.sh build_kernel.sh
           LOG_FILE="$GITHUB_WORKSPACE/scene-ebpf-build.log"
           echo "===== Scene eBPF raw build log =====" | tee "$LOG_FILE"
-          echo "run_id=${GITHUB_RUN_ID} sha=${GITHUB_SHA} device=${DEVICE} target_os=${TARGET_OS}" | tee -a "$LOG_FILE"
+          echo "run_id=${GITHUB_RUN_ID} sha=${GITHUB_SHA} device=${DEVICE} target_os=${TARGET_OS}" \vert{} tee -a "$LOG_FILE"
 
-          # This 4.19 tree has the 5.15 BTF-ID link hook but not the host-side
-          # resolve_btfids sources. Jammy's generic 5.15 headers ship the
-          # matching prebuilt host resolver. Point Kbuild at that resolver
-          # instead of the missing objtree/tools/bpf/resolve_btfids binary.
+          # 修复高版本 pahole 1.24+ 导致旧内核编译报 BTF 错误的问题
+          if [ -f "scripts/pahole-flags.sh" ]; then
+            echo "[*] Patching scripts/pahole-flags.sh for new pahole..." | tee -a "$LOG_FILE"
+            echo 'extra_paholeopt="${extra_paholeopt} --skip_encoding_btf_enum64"' >> scripts/pahole-flags.sh
+          fi
+
+          # 5.15 resolve_btfids host tool 配置
           RESOLVE_BTFIDS_HOST="$(find /usr/src/linux-headers-5.15.*-generic -type f -path '*/tools/bpf/resolve_btfids/resolve_btfids' -perm -111 2>/dev/null | sort -V | tail -n 1)"
-          if [[ -z "$RESOLVE_BTFIDS_HOST" || ! -x "$RESOLVE_BTFIDS_HOST" ]]; then
+          if [[ -z "$RESOLVE_BTFIDS_HOST" \vert{}\vert{} ! -x "$RESOLVE_BTFIDS_HOST" ]]; then
             echo "[!] 5.15 resolve_btfids host tool not found after installing linux-headers-generic" | tee -a "$LOG_FILE"
             exit 1
           fi
-          echo "[*] resolve_btfids: $RESOLVE_BTFIDS_HOST" | tee -a "$LOG_FILE"
+          echo "[*] resolve_btfids: $RESOLVE_BTFIDS_HOST" \vert{} tee -a "$LOG_FILE"
           sed -i "s|^RESOLVE_BTFIDS[[:space:]]*=.*|RESOLVE_BTFIDS = $RESOLVE_BTFIDS_HOST|" Makefile
           grep '^RESOLVE_BTFIDS' Makefile | tee -a "$LOG_FILE"
 
-          ./build_scene_ebpf.sh "$DEVICE" "$TARGET_OS" 2>&1 | tee -a "$LOG_FILE"
+          ./build_scene_ebpf.sh "$DEVICE" "$TARGET_OS" 2>&1 \vert{} tee -a "$LOG_FILE"
           BUILD_RC=${PIPESTATUS[0]}
-          echo "===== build exit code: ${BUILD_RC} =====" | tee -a "$LOG_FILE"
+          echo "===== build exit code: ${BUILD_RC} =====" \vert{} tee -a "$LOG_FILE"
           exit "$BUILD_RC"
 
       - name: Upload raw build log
