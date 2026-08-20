@@ -78,13 +78,11 @@ jobs:
           echo "===== Scene eBPF raw build log =====" | tee "$LOG_FILE"
           echo "run_id=${GITHUB_RUN_ID} sha=${GITHUB_SHA} device=${DEVICE} target_os=${TARGET_OS}" \vert{} tee -a "$LOG_FILE"
 
-          # 修复高版本 pahole 1.24+ 导致旧内核编译报 BTF 错误的问题
           if [ -f "scripts/pahole-flags.sh" ]; then
             echo "[*] Patching scripts/pahole-flags.sh for new pahole..." | tee -a "$LOG_FILE"
             echo 'extra_paholeopt="${extra_paholeopt} --skip_encoding_btf_enum64"' >> scripts/pahole-flags.sh
           fi
 
-          # 5.15 resolve_btfids host tool 配置
           RESOLVE_BTFIDS_HOST="$(find /usr/src/linux-headers-5.15.*-generic -type f -path '*/tools/bpf/resolve_btfids/resolve_btfids' -perm -111 2>/dev/null | sort -V | tail -n 1)"
           if [[ -z "$RESOLVE_BTFIDS_HOST" \vert{}\vert{} ! -x "$RESOLVE_BTFIDS_HOST" ]]; then
             echo "[!] 5.15 resolve_btfids host tool not found after installing linux-headers-generic" | tee -a "$LOG_FILE"
