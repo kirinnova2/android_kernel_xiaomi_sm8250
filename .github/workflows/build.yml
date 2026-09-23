@@ -48,11 +48,8 @@ env:
   CCACHE_COMPRESS: 1
   CCACHE_COMPRESSLEVEL: 6
 
-  # Final visible kernel release string
   KERNELRELEASE_OVERRIDE_BASE: '5.15.325-Ikun-KirinNova'
 
-  # This only enables the spoof mode.
-  # It does NOT change the source tree's real VERSION/PATCHLEVEL/SUBLEVEL.
   SPOOF_KERNEL_VERSION: 'true'
   SPOOFED_KERNEL_VERSION: '5.15.325'
 
@@ -130,7 +127,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Keep a local suffix, but do not rely on it for the final visible release.
           sed -i 's|^EXTRAVERSION =.*|EXTRAVERSION = -Ikun-KirinNova|' Makefile
 
           find arch/arm64/configs -maxdepth 1 -type f -name "*defconfig" -print0 |
@@ -185,14 +181,12 @@ jobs:
           explicit_make = 'make KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}" "${MAKE_OPTS[@]}"'
           old_make = 'make "${MAKE_OPTS[@]}"'
 
-          # Rewrite all simple make invocations that use MAKE_OPTS.
           if old_make in text:
               text = text.replace(old_make, explicit_make)
               print("[+] Replaced generic make invocations with explicit KERNELRELEASE")
           else:
               print("[+] No generic make invocations found to rewrite")
 
-          # Ensure olddefconfig passes KERNELRELEASE as well.
           if 'make KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}" "${MAKE_OPTS[@]}" olddefconfig' not in text:
               marker = '    make "${MAKE_OPTS[@]}" olddefconfig\n'
               if marker in text:
@@ -205,7 +199,6 @@ jobs:
               else:
                   print("[WARN] olddefconfig marker not found")
 
-          # Add explicit kernel release verification before compilation.
           verify_block = (
               '    echo "[*] Verifying kernel release..."\n'
               '    ACTUAL_KERNELRELEASE="$(make KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}" "${MAKE_OPTS[@]}" -s kernelrelease)"\n'
