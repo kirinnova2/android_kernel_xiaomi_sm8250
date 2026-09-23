@@ -48,7 +48,7 @@ env:
   CCACHE_COMPRESS: 1
   CCACHE_COMPRESSLEVEL: 6
 
-  # Final visible kernel release
+  # Final visible kernel release string
   KERNELRELEASE_OVERRIDE_BASE: '5.15.325-Ikun-KirinNova'
 
   # This only enables the spoof mode.
@@ -130,8 +130,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Remove vendor/other suffixes and keep a local suffix.
-          # The final KERNELRELEASE is still overridden below.
+          # Keep a local suffix, but do not rely on it for the final visible release.
           sed -i 's|^EXTRAVERSION =.*|EXTRAVERSION = -Ikun-KirinNova|' Makefile
 
           find arch/arm64/configs -maxdepth 1 -type f -name "*defconfig" -print0 |
@@ -183,44 +182,56 @@ jobs:
           path = Path("build_kernel.sh")
           text = path.read_text()
 
-          release_line = '        KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}"\n'
+          explicit_make = 'make KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}" "${MAKE_OPTS[@]}"'
+          old_make = 'make "${MAKE_OPTS[@]}"'
 
-          if release_line not in text:
-              marker = '        CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"\n'
-              if marker not in text:
-                  raise SystemExit("[ERROR] Could not find MAKE_OPTS insertion point in build_kernel.sh")
+          # Rewrite all simple make invocations that use MAKE_OPTS.
+          if old_make in text:
+              text = text.replace(old_make, explicit_make)
+              print("[+] Replaced generic make invocations with explicit KERNELRELEASE")
+          else:
+              print("[+] No generic make invocations found to rewrite")
 
-              replacement = (
-                  marker
-                  + '        # Override only the final kernel release string.\n'
-                  + '        # Do not modify VERSION/PATCHLEVEL/SUBLEVEL.\n'
-                  + release_line
-              )
-              text = text.replace(marker, replacement, 1)
+          # Ensure olddefconfig passes KERNELRELEASE as well.
+          if 'make KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}" "${MAKE_OPTS[@]}" olddefconfig' not in text:
+              marker = '    make "${MAKE_OPTS[@]}" olddefconfig\n'
+              if marker in text:
+                  text = text.replace(
+                      marker,
+                      '    make KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}" "${MAKE_OPTS[@]}" olddefconfig\n',
+                      1
+                  )
+                  print("[+] Added explicit KERNELRELEASE to olddefconfig")
+              else:
+                  print("[WARN] olddefconfig marker not found")
 
-          olddefconfig_line = '    make "${MAKE_OPTS[@]}" olddefconfig\n'
+          # Add explicit kernel release verification before compilation.
           verify_block = (
-              '    make "${MAKE_OPTS[@]}" olddefconfig\n'
-              + '\n'
-              + '    echo "[*] Verifying kernel release..."\n'
-              + '    ACTUAL_KERNELRELEASE="$(make "${MAKE_OPTS[@]}" -s kernelrelease)"\n'
-              + '    EXPECTED_KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}"\n'
-              + '    echo "[*] Expected kernel release: ${EXPECTED_KERNELRELEASE}"\n'
-              + '    echo "[*] Actual kernel release:   ${ACTUAL_KERNELRELEASE}"\n'
-              + '    if [ "${ACTUAL_KERNELRELEASE}" != "${EXPECTED_KERNELRELEASE}" ]; then\n'
-              + '        echo "[ERROR] Kernel release verification failed." >&2\n'
-              + '        exit 1\n'
-              + '    fi\n'
-              + '    echo "[+] Kernel release verified: ${ACTUAL_KERNELRELEASE}"\n'
+              '    echo "[*] Verifying kernel release..."\n'
+              '    ACTUAL_KERNELRELEASE="$(make KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}" "${MAKE_OPTS[@]}" -s kernelrelease)"\n'
+              '    EXPECTED_KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}"\n'
+              '    echo "[*] Expected kernel release: ${EXPECTED_KERNELRELEASE}"\n'
+              '    echo "[*] Actual kernel release:   ${ACTUAL_KERNELRELEASE}"\n'
+              '    if [ "${ACTUAL_KERNELRELEASE}" != "${EXPECTED_KERNELRELEASE}" ]; then\n'
+              '        echo "[ERROR] Kernel release verification failed." >&2\n'
+              '        exit 1\n'
+              '    fi\n'
+              '    echo "[+] Kernel release verified: ${ACTUAL_KERNELRELEASE}"\n'
           )
 
-          if 'ACTUAL_KERNELRELEASE="$(make "${MAKE_OPTS[@]}" -s kernelrelease)"' not in text:
-              if olddefconfig_line not in text:
-                  raise SystemExit("[ERROR] Could not find olddefconfig block in build_kernel.sh")
-              text = text.replace(olddefconfig_line, verify_block, 1)
+          if 'ACTUAL_KERNELRELEASE="$(make KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}" "${MAKE_OPTS[@]}" -s kernelrelease)"' not in text:
+              marker2 = '    echo "[*] Updating config (make olddefconfig)..."\n'
+              if marker2 in text:
+                  idx = text.index(marker2)
+                  text = text[:idx] + marker2 + verify_block + text[idx + len(marker2):]
+                  print("[+] Inserted kernel release verification block")
+              else:
+                  print("[WARN] verification insertion point not found")
+          else:
+              print("[+] Verification block already present")
 
           path.write_text(text)
-          print("[+] KERNELRELEASE override and validation inserted into build_kernel.sh")
+          print("[+] build_kernel.sh updated with explicit KERNELRELEASE override")
           PY
 
           echo '=== KERNELRELEASE configuration ==='
