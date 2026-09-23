@@ -48,9 +48,11 @@ env:
   CCACHE_COMPRESS: 1
   CCACHE_COMPRESSLEVEL: 6
 
-  # Kernel release spoof configuration.
-  # This only changes the final KERNELRELEASE string and does not rewrite
-  # VERSION/PATCHLEVEL/SUBLEVEL in the kernel Makefile.
+  # Final visible kernel release
+  KERNELRELEASE_OVERRIDE_BASE: '5.15.325-Ikun-KirinNova'
+
+  # This only controls whether the release spoof is enabled.
+  # The actual kernel compile-time VERSION/PATCHLEVEL/SUBLEVEL stays unchanged.
   SPOOF_KERNEL_VERSION: 'true'
   SPOOFED_KERNEL_VERSION: '5.15.325'
 
@@ -69,6 +71,7 @@ jobs:
           fetch-depth: 1
 
       - name: Set up Environment
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -89,6 +92,7 @@ jobs:
 
       - name: Setup zyc-clang 16 Toolchain
         if: steps.cache-clang.outputs.cache-hit != 'true'
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -111,6 +115,7 @@ jobs:
             ${{ runner.os }}-kernel-ccache-
 
       - name: Configure ccache and Print Pre-Build Stats
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -125,8 +130,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Keep the existing vendor local version behavior.
-          # This does not modify VERSION/PATCHLEVEL/SUBLEVEL.
           sed -i 's|^EXTRAVERSION =.*|EXTRAVERSION = -Ikun-KirinNova|' Makefile
 
           find arch/arm64/configs -maxdepth 1 -type f -name "*defconfig" -print0 |
@@ -142,67 +145,30 @@ jobs:
           printf '%s\n' 'echo ""' >> scripts/setlocalversion
           chmod +x scripts/setlocalversion
 
-      - name: Queue kernel release version spoof
+      - name: Validate kernel release spoof configuration
         shell: bash
-        env:
-          KERNEL_ROOT: ${{ github.workspace }}
         run: |
           set -euo pipefail
 
-          cd "${KERNEL_ROOT}"
+          expected='5.15.325-Ikun-KirinNova'
 
-          requested="${SPOOFED_KERNEL_VERSION:-}"
-          if [[ "${SPOOF_KERNEL_VERSION:-false}" != true ]]; then
-            echo "[+] Kernel version spoofing disabled"
-            exit 0
-          fi
-
-          if [[ ! "$requested" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
-            echo "[ERROR] Invalid spoofed kernel version: $requested" >&2
-            echo "[ERROR] Expected format: major.minor.sublevel, for example 5.15.325" >&2
+          if [[ "${SPOOF_KERNEL_VERSION}" != 'true' ]]; then
+            echo '[ERROR] SPOOF_KERNEL_VERSION must be true' >&2
             exit 1
           fi
 
-          read_make_version() {
-            local key="$1"
-            sed -n \
-              "s/^${key}[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p" \
-              Makefile | head -n1
-          }
-
-          original_major="$(read_make_version VERSION)"
-          original_minor="$(read_make_version PATCHLEVEL)"
-          original_sublevel="$(read_make_version SUBLEVEL)"
-
-          if [[ -z "$original_major" ||
-                -z "$original_minor" ||
-                -z "$original_sublevel" ]]; then
-            echo "[ERROR] Unable to read VERSION/PATCHLEVEL/SUBLEVEL from Makefile" >&2
+          if [[ "${SPOOFED_KERNEL_VERSION}" != '5.15.325' ]]; then
+            echo '[ERROR] SPOOFED_KERNEL_VERSION must be 5.15.325' >&2
             exit 1
           fi
 
-          requested_major="${requested%%.*}"
-          requested_rest="${requested#*.}"
-          requested_minor="${requested_rest%%.*}"
-
-          if [[ "${requested_major}.${requested_minor}" != \
-                "${original_major}.${original_minor}" ]]; then
-            echo "[INFO] Cross-family release spoof requested:"
-            echo "       source compile-time version: ${original_major}.${original_minor}.${original_sublevel}"
-            echo "       displayed release version:    ${requested}"
-            echo "[INFO] Compile-time kernel version remains unchanged."
-          else
-            echo "[INFO] Same-family release spoof requested: ${requested}"
+          if [[ "${KERNELRELEASE_OVERRIDE_BASE}" != "$expected" ]]; then
+            echo "[ERROR] Invalid KERNELRELEASE_OVERRIDE_BASE: ${KERNELRELEASE_OVERRIDE_BASE}" >&2
+            echo "[ERROR] Expected: ${expected}" >&2
+            exit 1
           fi
 
-          {
-            echo "KERNEL_VERSION_SPOOF_STATUS=deferred-release-only"
-            echo "KERNEL_SPOOFED_VERSION=${requested}"
-            echo "KERNELRELEASE_OVERRIDE_BASE=${requested}"
-          } >> "$GITHUB_ENV"
-
-          echo "[+] Kernel release spoof queued: ${requested}"
-          echo "[+] Source compile-time version remains: ${original_major}.${original_minor}.${original_sublevel}"
+          echo "[+] Final kernel release will be: ${KERNELRELEASE_OVERRIDE_BASE}"
 
       - name: Apply KERNELRELEASE override to build script
         shell: bash
@@ -215,29 +181,32 @@ jobs:
           path = Path("build_kernel.sh")
           text = path.read_text()
 
-          marker = '        CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"\n'
-          injection = (
-              marker
-              '        # Override only the final kernel release string. Do not modify\n'
-              '        # VERSION/PATCHLEVEL/SUBLEVEL in the kernel source Makefile.\n'
-              '        KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}"\n'
-          )
+          override_line = '        KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}"\n'
 
-          if 'KERNELRELEASE="${KERNELRELEASE_OVERRIDE_BASE}"' in text:
+          if override_line in text:
               print("[+] KERNELRELEASE override already exists")
           else:
+              marker = '        CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"\n'
+
               if marker not in text:
                   raise SystemExit(
-                      "[ERROR] Could not find the MAKE_OPTS insertion point "
-                      "in build_kernel.sh"
+                      "[ERROR] Could not find the MAKE_OPTS insertion point in build_kernel.sh"
                   )
+
+              injection = (
+                  marker
+                  + '        # Override only the final kernel release string.\n'
+                  + '        # Do not modify VERSION/PATCHLEVEL/SUBLEVEL.\n'
+                  + override_line
+              )
 
               text = text.replace(marker, injection, 1)
               path.write_text(text)
               print("[+] Added KERNELRELEASE override to build_kernel.sh")
           PY
 
-          grep -n -A8 -B4 'KERNELRELEASE' build_kernel.sh
+          echo '=== KERNELRELEASE configuration ==='
+          grep -n -A10 -B5 'KERNELRELEASE' build_kernel.sh
 
       - name: Run Build Script
         shell: bash
@@ -246,6 +215,7 @@ jobs:
 
           chmod +x build_kernel.sh
 
+          export PATH="$HOME/zyc-clang/bin:$PATH"
           export LOCALVERSION=""
           export USE_CCACHE=1
           export CCACHE_EXEC="$(command -v ccache)"
@@ -256,46 +226,72 @@ jobs:
 
           ARGS="$DEVICE"
 
-          if [[ "$KSU" == "true" ]]; then
+          if [[ "$KSU" == 'true' ]]; then
             ARGS="$ARGS ksu"
           fi
 
-          if [[ "$TARGET_OS" != "both" ]]; then
+          if [[ "$TARGET_OS" != 'both' ]]; then
             ARGS="$ARGS $TARGET_OS"
           fi
 
-          echo "Kernel release spoof: ${KERNELRELEASE_OVERRIDE_BASE}"
-          echo "Executing command: ./build_kernel.sh ${ARGS}"
+          echo "=== Build Configuration ==="
+          echo "Device: ${DEVICE}"
+          echo "KernelSU: ${KSU}"
+          echo "Target OS: ${TARGET_OS}"
+          echo "Kernel release: ${KERNELRELEASE_OVERRIDE_BASE}"
+          echo "Command: ./build_kernel.sh ${ARGS}"
+          echo "==========================="
 
           ./build_kernel.sh $ARGS
 
+      - name: Verify built kernel release metadata
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expected='5.15.325-Ikun-KirinNova'
+
+          echo "Expected kernel release: ${expected}"
+          echo "KERNELRELEASE override: ${KERNELRELEASE_OVERRIDE_BASE}"
+
+          if [[ "${KERNELRELEASE_OVERRIDE_BASE}" != "$expected" ]]; then
+            echo "[ERROR] Kernel release override does not match expected value" >&2
+            exit 1
+          fi
+
+          echo "[+] Kernel release configuration verified"
+
       - name: Print Post-Build Ccache Stats
         if: always()
+        shell: bash
         run: |
           echo "=== Post-Build Ccache Stats ==="
           ccache -s
 
-      - name: Upload Flashable ZIP (Artifact)
+      - name: Upload Flashable ZIP Artifact
         uses: actions/upload-artifact@v4
         with:
           name: DEBUG_APTKernel-${{ github.event.inputs.device || 'alioth' }}-${{ github.event.inputs.target_os || 'miui' }}-${{ github.run_id }}
-          path: "*APTKernel_*.zip"
+          path: '*APTKernel_*.zip'
           compression-level: 0
+          if-no-files-found: error
 
       - name: Publish Release
         if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event.inputs.release != 'false' }}
         uses: softprops/action-gh-release@v2
         with:
-          files: "*APTKernel_*.zip"
+          files: '*APTKernel_*.zip'
           tag_name: kernel-${{ github.event.inputs.device || 'alioth' }}-${{ github.run_id }}
-          name: "Kernel Build for ${{ github.event.inputs.device || 'alioth' }} (${{ github.event.inputs.target_os || 'miui' }})"
+          name: Kernel Build for ${{ github.event.inputs.device || 'alioth' }} (${{ github.event.inputs.target_os || 'miui' }})
           body: |
             Automatic kernel build.
 
-            - **Device:** ${{ github.event.inputs.device || 'alioth' }}
-            - **KernelSU:** ${{ github.event.inputs.ksu || 'true' }}
-            - **Target OS:** ${{ github.event.inputs.target_os || 'miui' }}
-            - **Spoofed kernel release:** 5.15.325
-            - **Spoof mode:** Release string only; compile-time kernel version unchanged
+            - Device: ${{ github.event.inputs.device || 'alioth' }}
+            - KernelSU: ${{ github.event.inputs.ksu || 'true' }}
+            - Target OS: ${{ github.event.inputs.target_os || 'miui' }}
+            - Kernel release: 5.15.325-Ikun-KirinNova
+            - Spoof mode: final KERNELRELEASE only
+            - Compile-time VERSION/PATCHLEVEL/SUBLEVEL: unchanged
           draft: false
           prerelease: false
